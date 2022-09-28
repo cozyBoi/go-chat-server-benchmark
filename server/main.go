@@ -16,8 +16,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-//bson.D{{"timestamp", time.Now().UnixNano() / int64(time.Millisecond)},
-//{"room", roomId}, {"id", cid.Value}, {"msg", str_msg}}
 type bson_struct struct {
 	Timestamp int64  `bson:"timestamp"`
 	RoomId    int    `bson:"room"`
