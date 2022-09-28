@@ -1,5 +1,6 @@
 var ws;
 window.addEventListener("load", function(evt) {
+    //get last 30 chats
     var output = document.getElementById("output");
     var input = document.getElementById("input");
     if (ws) {
@@ -14,10 +15,9 @@ window.addEventListener("load", function(evt) {
     uri += '//' + loc.host;
     uri += loc.pathname + '/ws';
     console.log(uri)
-
+    
     ws = new WebSocket(uri);
 
-    //get last 30 chats
     httpGetAsync(loc.pathname + '/chats', printChats)
 
     function printChats(chats){

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
@@ -15,7 +16,17 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+//bson.D{{"timestamp", time.Now().UnixNano() / int64(time.Millisecond)},
+//{"room", roomId}, {"id", cid.Value}, {"msg", str_msg}}
+type bson_struct struct {
+	Timestamp int64  `bson:"timestamp"`
+	RoomId    int    `bson:"room"`
+	UserId    string `bson:"id"`
+	Msg       string `bson:"msg"`
+}
+
 var mg_client *mongo.Client
+var coll *mongo.Collection
 
 var upgrader = websocket.Upgrader{
 	EnableCompression: true,
@@ -56,6 +67,21 @@ func socketHandler(ctx echo.Context) error {
 	if !flag {
 		conns[roomId] = make([]*websocket.Conn, 0, 10)
 		chatCache[roomId] = NewQ()
+
+		opts := options.Find().SetSort(bson.D{{"timestamp", 1}})
+		var thirty int64 = 30
+		opts.Limit = &thirty
+
+		filter := bson.D{{"room", roomId}}
+		cursor, _ := coll.Find(context.TODO(), filter, opts)
+		var results []bson.M
+		cursor.All(context.TODO(), &results)
+		for _, result := range results {
+			var bs bson_struct
+			bsonBytes, _ := bson.Marshal(result)
+			bson.Unmarshal(bsonBytes, &bs)
+			chatCache[roomId].Push(buff{Msg: bs.Msg, Sender: bs.UserId})
+		}
 	}
 
 	conns[roomId] = append(conns[roomId], c)
@@ -74,8 +100,7 @@ func socketHandler(ctx echo.Context) error {
 		}
 		str_msg := string(msg)
 		newChat := buff{Msg: str_msg, Sender: cid.Value}
-		coll := mg_client.Database("go-chat-server").Collection("chat-info")
-		docs := bson.D{{"room", roomId}, {"id", cid.Value}, {"msg", str_msg}}
+		docs := bson.D{{"timestamp", time.Now().UnixNano() / int64(time.Millisecond)}, {"room", roomId}, {"id", cid.Value}, {"msg", str_msg}}
 		coll.InsertOne(context.TODO(), docs)
 		chatCache[roomId].Push(newChat)
 		broadcast_msg(c, msg, roomId)
@@ -140,7 +165,7 @@ func main() {
 	}
 
 	mg_client = client
-
+	coll = mg_client.Database("go-chat-server").Collection("chat-info")
 	defer func() {
 		if err := client.Disconnect(context.TODO()); err != nil {
 			panic(err)
