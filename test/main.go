@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,9 +17,13 @@ import (
 var addr = flag.String("addr", "localhost:9100", "http service address")
 
 func testFunc(id int) {
+	fmt.Println("0")
 	http.Get("http://localhost:9100")
+	fmt.Println("1")
 	http.Get("http://localhost:9100/cookie")
+	fmt.Println("2")
 	http.Get("http://localhost:9100/rooms")
+	fmt.Println("3")
 
 	flag.Parse()
 	log.SetFlags(0)
@@ -27,6 +32,8 @@ func testFunc(id int) {
 	signal.Notify(interrupt, os.Interrupt)
 
 	u := url.URL{Scheme: "ws", Host: *addr, Path: "/rooms/1/ws"}
+	log.Printf("connecting to %s", u.String())
+
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		log.Fatal("dial:", err)
@@ -81,10 +88,12 @@ func testFunc(id int) {
 
 func main() {
 	//한 유저가 20명의 유저에 연결
-	for i := 0; i < 10; i++ {
-		go testFunc(10)
+	for i := 0; i < 1; i++ {
+		go testFunc(i)
 	}
 	var wait sync.WaitGroup
+
+	wait.Add(10)
 
 	wait.Wait()
 }

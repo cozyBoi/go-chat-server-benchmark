@@ -55,7 +55,12 @@ func connClose(c *websocket.Conn, rid int) {
 }
 
 func socketHandler(ctx echo.Context) error {
-	upgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	fmt.Println("get sock")
+	cid := "0"
+	fmt.Println("get sock2")
+
+	//upgrader.CheckOrigin = func(r *http.Request) bool { return true }
+
 	c, _ := upgrader.Upgrade(ctx.Response(), ctx.Request(), nil)
 
 	roomIdStr := ctx.Param("id")
@@ -83,10 +88,6 @@ func socketHandler(ctx echo.Context) error {
 	}
 
 	conns[roomId] = append(conns[roomId], c)
-	cid, err := ctx.Cookie("cid")
-	if err != nil {
-		return err
-	}
 
 	for {
 		_, msg, err := c.ReadMessage() //get msg type and msg
@@ -97,8 +98,8 @@ func socketHandler(ctx echo.Context) error {
 			chatCache[roomId].Pop()
 		}
 		str_msg := string(msg)
-		newChat := buff{Msg: str_msg, Sender: cid.Value}
-		docs := bson.D{{"timestamp", time.Now().UnixNano() / int64(time.Millisecond)}, {"room", roomId}, {"id", cid.Value}, {"msg", str_msg}}
+		newChat := buff{Msg: str_msg, Sender: cid}
+		docs := bson.D{{"timestamp", time.Now().UnixNano() / int64(time.Millisecond)}, {"room", roomId}, {"id", cid}, {"msg", str_msg}}
 		coll.InsertOne(context.TODO(), docs)
 		chatCache[roomId].Push(newChat)
 		broadcast_msg(c, msg, roomId)
