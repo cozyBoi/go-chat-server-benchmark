@@ -1,4 +1,4 @@
-module chat-sever-bench
+module client
 
 go 1.17
 
