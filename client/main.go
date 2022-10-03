@@ -1,22 +1,33 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+type Payload struct {
+	UserId int    `json:"userid"`
+	RoomId int    `json:"roomid"`
+	Msg    string `json:"msg"`
+}
+
 var addr = flag.String("addr", "localhost:9100", "http service address")
 
 var done chan bool
-var client_number int = 200
+var room_number_per_user int = 5
+var client_number int = 50
+var t_room_number int = client_number / room_number_per_user //user randomly placed on 20 room, average user / room => 20
 
-func testFunc(id int) {
+func testFunc(id int, roomList []int) {
 	u := url.URL{Scheme: "ws", Host: *addr, Path: "/ws"}
 	log.Printf("connecting to %s", u.String())
 
@@ -29,24 +40,41 @@ func testFunc(id int) {
 	go func() {
 		defer close(done)
 		for {
-			_, _, err := c.ReadMessage()
+			var newPld Payload
+			var newJson []byte
+			c.ReadJSON(newJson)
+			json.Unmarshal(newJson, &newPld)
 			if err != nil {
 				log.Println("read:", err)
 				return
 			}
-			//fmt.Printf("get from id %d\n", id)
 		}
 	}()
 
+	//*** send chat room info ***
+	//send chat room num
+	c.WriteMessage(1, []byte(strconv.Itoa(room_number_per_user)))
+	//send chat room lists
+	for i := 0; i < room_number_per_user; i++ {
+		c.WriteMessage(1, []byte(strconv.Itoa(roomList[i])))
+	}
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+
+	var roomIdx int = 0
 
 	for {
 		select {
 		case <-done:
 			return
 		case t := <-ticker.C:
-			err := c.WriteMessage(websocket.TextMessage, []byte(t.String()))
+			newPld := &Payload{UserId: 0, RoomId: roomList[roomIdx], Msg: t.String()}
+			err := c.WriteJSON(newPld)
+			roomIdx++
+			if room_number_per_user >= roomIdx {
+				roomIdx = 0
+			}
 			if err != nil {
 				log.Println("write:", err)
 				return
@@ -59,7 +87,29 @@ func main() {
 	done = make(chan bool)
 
 	for i := 0; i < client_number; i++ {
-		go testFunc(i)
+		//generate 20 random number
+		var roomList []int
+		for {
+			var flag bool = false
+			rand_num := rand.Intn(t_room_number)
+			if len(roomList) < room_number_per_user {
+				for r := range roomList {
+					if rand_num == r {
+						flag = true
+						break
+					}
+				}
+
+				if flag {
+					continue
+				}
+
+				roomList = append(roomList, rand_num)
+			} else {
+				break
+			}
+		}
+		go testFunc(i, roomList)
 	}
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()

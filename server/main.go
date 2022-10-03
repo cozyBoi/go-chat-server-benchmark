@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -11,7 +13,18 @@ import (
 
 type Client struct {
 	conn *websocket.Conn
-	get  chan []byte
+	get  chan Payload
+}
+
+type ConnInfo struct {
+	conn   Client
+	roomid int
+}
+
+type Payload struct {
+	UserId int    `json:userid`
+	RoomId int    `json:roomid`
+	Msg    string `json:msg`
 }
 
 var broadcast_cnt chan int
@@ -20,17 +33,19 @@ var send_msg_cnt chan int
 
 var upgrader = websocket.Upgrader{} // use default options
 
-var conns []*Client
+//var conns []*Client
 
-var C_chan chan *Client
+var connMap map[int][]*Client
 
-func broadcast_msg(conn *websocket.Conn, msg []byte) int {
+var C_chan chan ConnInfo
+
+func broadcast_msg(conn *websocket.Conn, pld Payload, roomid int) int {
 	var ret int
-	for _, curr_conn := range conns {
+	for _, curr_conn := range connMap[roomid] {
 		if curr_conn.conn == conn {
 			continue
 		}
-		curr_conn.get <- msg
+		curr_conn.get <- pld
 		ret++
 	}
 	return ret
@@ -41,11 +56,13 @@ func serve_ws(ctx echo.Context) error {
 	init_s = time.Now()
 	var b_cnt int
 	var s_cnt int
+
 	c, err := upgrader.Upgrade(ctx.Response(), ctx.Request(), nil)
 	if err != nil {
 		log.Print("upgrade:", err)
 		return err
 	}
+
 	defer func() {
 		c.Close()
 		broadcast_cnt <- b_cnt
@@ -54,28 +71,43 @@ func serve_ws(ctx echo.Context) error {
 
 	currClnt := new(Client)
 	currClnt.conn = c
-	currClnt.get = make(chan []byte)
-	C_chan <- currClnt
+	currClnt.get = make(chan Payload)
+
+	//Need WebServe Chat Room Information Handshaking OR GET from DB
+
+	//*** get chat room info ***
+	//get chat room num
+	_, msg, _ := c.ReadMessage()
+	roomNumber, _ := strconv.Atoi(string(msg))
+	//get chat room lists
+	for i := 0; i < roomNumber; i++ {
+		_, msg, _ := c.ReadMessage()
+		roomIdx, _ := strconv.Atoi(string(msg))
+		C_chan <- ConnInfo{conn: *currClnt, roomid: roomIdx}
+	}
+
 	fmt.Println("[init lat]", time.Since(init_s))
 
 	go func() {
-		for newMsg := range currClnt.get {
-			currClnt.conn.WriteMessage(1, newMsg)
-			//fmt.Println("writing")
+		for newPld := range currClnt.get {
+			pld, _ := json.Marshal(Payload{UserId: 0, RoomId: newPld.RoomId, Msg: newPld.Msg})
+			currClnt.conn.WriteJSON(pld)
 			s_cnt++
 		}
 	}()
 
 	for {
-		_, message, err := currClnt.conn.ReadMessage() //get msg type and msg
-		//fmt.Println("Reading", message)
+		var newPld Payload
+		//var newJson []byte
+		currClnt.conn.ReadJSON(&newPld) //get msg type and msg
+		//fmt.Println(newPld)
 		if err != nil {
 			log.Println("read:", err)
 			break
 		}
 
 		prs_s = time.Now()
-		b_cnt += broadcast_msg(c, message)
+		b_cnt += broadcast_msg(c, newPld, newPld.RoomId)
 		fmt.Println("[broad lat]", time.Since(prs_s))
 	}
 	return err
@@ -84,12 +116,17 @@ func serve_ws(ctx echo.Context) error {
 func conn_mng() {
 	fmt.Println("conn_manage start")
 	for new_clnt := range C_chan {
-		conns = append(conns, new_clnt)
+		if _, ok := connMap[new_clnt.roomid]; ok {
+			connMap[new_clnt.roomid] = append(connMap[new_clnt.roomid], &new_clnt.conn)
+		} else {
+			connMap[new_clnt.roomid] = make([]*Client, 0, 10)
+			connMap[new_clnt.roomid] = append(connMap[new_clnt.roomid], &new_clnt.conn)
+		}
 	}
 }
 
 func initFunc() {
-	C_chan = make(chan *Client)
+	C_chan = make(chan ConnInfo)
 	broadcast_cnt = make(chan int)
 	send_msg_cnt = make(chan int)
 }
@@ -97,13 +134,18 @@ func initFunc() {
 func main() {
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
+	connMap = make(map[int][]*Client)
 
 	var t_b_cnt int
 	var t_s_cnt int
+
 	initFunc()
+
 	e := echo.New()
 	e.GET("/ws", serve_ws)
+
 	go conn_mng()
+
 	go func() {
 		for {
 			select {
