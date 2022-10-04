@@ -1,19 +1,16 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strconv"
 	"time"
+	"database/sql"
+    _ "github.com/go-sql-driver/mysql"
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Client struct {
@@ -44,7 +41,7 @@ var connMap map[int][]*Client
 
 var C_chan chan ConnInfo
 
-var mg_client *mongo.Client
+var db_chan chan Payload
 
 func broadcast_msg(conn *websocket.Conn, pld Payload, roomid int) int {
 	var ret int
@@ -59,7 +56,6 @@ func broadcast_msg(conn *websocket.Conn, pld Payload, roomid int) int {
 }
 
 func serve_ws(ctx echo.Context) error {
-	coll := mg_client.Database("go-chat-server").Collection("chat-info")
 	var init_s, prs_s time.Time
 	init_s = time.Now()
 	var b_cnt int
@@ -108,14 +104,11 @@ func serve_ws(ctx echo.Context) error {
 		var newPld Payload
 		//var newJson []byte
 		currClnt.conn.ReadJSON(&newPld) //get msg type and msg
-
-		docs := bson.D{{"room", newPld.RoomId}, {"id", newPld.UserId}, {"msg", newPld.Msg}}
-		coll.InsertOne(context.TODO(), docs)
-
 		if err != nil {
 			log.Println("read:", err)
 			break
 		}
+		db_chan <- newPld
 
 		prs_s = time.Now()
 		b_cnt += broadcast_msg(c, newPld, newPld.RoomId)
@@ -138,28 +131,17 @@ func conn_mng() {
 
 func initFunc() {
 	C_chan = make(chan ConnInfo)
+	db_chan = make(chan Payload)
 	broadcast_cnt = make(chan int)
 	send_msg_cnt = make(chan int)
 }
 
 func main() {
-	uri := os.Getenv("MONGODB_URI")
-	if uri == "" {
-		log.Fatal("You must set your 'MONGODB_URI' environmental variable. See\n\t https://www.mongodb.com/docs/drivers/go/current/usage-examples/#environment-variable")
-	}
-
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(uri))
-	if err != nil {
-		panic(err)
-	}
-
-	mg_client = client
-
-	defer func() {
-		if err := client.Disconnect(context.TODO()); err != nil {
-			panic(err)
-		}
-	}()
+	db, err := sql.Open("mysql", "root:1234@tcp(127.0.0.1:3306)/testdb")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
 
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
@@ -183,6 +165,18 @@ func main() {
 			case ret := <-send_msg_cnt:
 				t_s_cnt += ret
 			}
+		}
+	}()
+
+	go func() {
+		for newPld := range db_chan {
+			fmt.Println("INSERT INTO chat_info VALUE (" + strconv.Itoa(newPld.UserId) + ", " + strconv.Itoa(newPld.RoomId) + ", " + "\"" + newPld.Msg + "\", " + "\"" + "hi" + "\");")
+			result, err := db.Exec("INSERT INTO chat_info VALUE (" + strconv.Itoa(newPld.UserId) + ", " + strconv.Itoa(newPld.RoomId) + ", " + "\"" + newPld.Msg + "\", " + "\"" + "hi" + "\");")
+			if err != nil {
+				fmt.Println(err)
+			}
+			nRow, err := result.RowsAffected()
+			fmt.Println("insert counts: ", nRow)
 		}
 	}()
 
