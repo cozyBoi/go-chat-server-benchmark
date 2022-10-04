@@ -1,13 +1,14 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
 	"time"
-	"database/sql"
-    _ "github.com/go-sql-driver/mysql"
+
+	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
@@ -24,9 +25,10 @@ type ConnInfo struct {
 }
 
 type Payload struct {
-	UserId int    `json:userid`
-	RoomId int    `json:roomid`
-	Msg    string `json:msg`
+	UserId    int    `json:userid`
+	RoomId    int    `json:roomid`
+	Msg       string `json:msg`
+	issueTime time.Time
 }
 
 var broadcast_cnt chan int
@@ -49,6 +51,7 @@ func broadcast_msg(conn *websocket.Conn, pld Payload, roomid int) int {
 		if curr_conn.conn == conn {
 			continue
 		}
+		pld.issueTime = time.Now()
 		curr_conn.get <- pld
 		ret++
 	}
@@ -56,10 +59,11 @@ func broadcast_msg(conn *websocket.Conn, pld Payload, roomid int) int {
 }
 
 func serve_ws(ctx echo.Context) error {
-	var init_s, prs_s time.Time
-	init_s = time.Now()
 	var b_cnt int
 	var s_cnt int
+
+	ticker := time.NewTicker(time.Second * 60)
+	defer ticker.Stop()
 
 	c, err := upgrader.Upgrade(ctx.Response(), ctx.Request(), nil)
 	if err != nil {
@@ -71,6 +75,16 @@ func serve_ws(ctx echo.Context) error {
 		c.Close()
 		broadcast_cnt <- b_cnt
 		send_msg_cnt <- s_cnt
+	}()
+
+	go func() {
+		for t := range ticker.C {
+			fmt.Println(t)
+			broadcast_cnt <- b_cnt
+			send_msg_cnt <- s_cnt
+			b_cnt = 0
+			s_cnt = 0
+		}
 	}()
 
 	currClnt := new(Client)
@@ -90,10 +104,9 @@ func serve_ws(ctx echo.Context) error {
 		C_chan <- ConnInfo{conn: *currClnt, roomid: roomIdx}
 	}
 
-	fmt.Println("[init lat]", time.Since(init_s))
-
 	go func() {
 		for newPld := range currClnt.get {
+			//fmt.Println("[broad lat]", time.Since(newPld.issueTime))
 			pld, _ := json.Marshal(Payload{UserId: 0, RoomId: newPld.RoomId, Msg: newPld.Msg})
 			currClnt.conn.WriteJSON(pld)
 			s_cnt++
@@ -108,11 +121,10 @@ func serve_ws(ctx echo.Context) error {
 			log.Println("read:", err)
 			break
 		}
-		db_chan <- newPld
+		newPld.issueTime = time.Now()
+		//db_chan <- newPld
 
-		prs_s = time.Now()
 		b_cnt += broadcast_msg(c, newPld, newPld.RoomId)
-		fmt.Println("[broad lat]", time.Since(prs_s))
 	}
 	return err
 }
@@ -138,10 +150,10 @@ func initFunc() {
 
 func main() {
 	db, err := sql.Open("mysql", "root:1234@tcp(127.0.0.1:3306)/testdb")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer db.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
@@ -162,21 +174,25 @@ func main() {
 			select {
 			case ret := <-broadcast_cnt:
 				t_b_cnt += ret
+				println("broad", t_b_cnt)
 			case ret := <-send_msg_cnt:
 				t_s_cnt += ret
+				println("send", t_s_cnt)
 			}
 		}
 	}()
 
 	go func() {
 		for newPld := range db_chan {
-			fmt.Println("INSERT INTO chat_info VALUE (" + strconv.Itoa(newPld.UserId) + ", " + strconv.Itoa(newPld.RoomId) + ", " + "\"" + newPld.Msg + "\", " + "\"" + "hi" + "\");")
-			result, err := db.Exec("INSERT INTO chat_info VALUE (" + strconv.Itoa(newPld.UserId) + ", " + strconv.Itoa(newPld.RoomId) + ", " + "\"" + newPld.Msg + "\", " + "\"" + "hi" + "\");")
+			//fmt.Println("INSERT INTO chat_info VALUE (" + strconv.Itoa(newPld.UserId) + ", " + strconv.Itoa(newPld.RoomId) + ", " + "\"" + newPld.Msg + "\", " + "\"" + "hi" + "\");")
+			//fmt.Println("[db lat]", time.Since(newPld.issueTime))
+			_, err := db.Exec("INSERT INTO chat_info VALUE (" + strconv.Itoa(newPld.UserId) + ", " + strconv.Itoa(newPld.RoomId) + ", " + "\"" + newPld.Msg + "\", " + "\"" + "hi" + "\");")
+			//result, err := db.Exec("INSERT INTO chat_info VALUE (" + strconv.Itoa(newPld.UserId) + ", " + strconv.Itoa(newPld.RoomId) + ", " + "\"" + newPld.Msg + "\", " + "\"" + "hi" + "\");")
 			if err != nil {
 				fmt.Println(err)
 			}
-			nRow, err := result.RowsAffected()
-			fmt.Println("insert counts: ", nRow)
+			//nRow, err := result.RowsAffected()
+			//fmt.Println("insert counts: ", nRow)
 		}
 	}()
 
