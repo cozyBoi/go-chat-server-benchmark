@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Client struct {
@@ -39,6 +44,8 @@ var connMap map[int][]*Client
 
 var C_chan chan ConnInfo
 
+var mg_client *mongo.Client
+
 func broadcast_msg(conn *websocket.Conn, pld Payload, roomid int) int {
 	var ret int
 	for _, curr_conn := range connMap[roomid] {
@@ -52,6 +59,7 @@ func broadcast_msg(conn *websocket.Conn, pld Payload, roomid int) int {
 }
 
 func serve_ws(ctx echo.Context) error {
+	coll := mg_client.Database("go-chat-server").Collection("chat-info")
 	var init_s, prs_s time.Time
 	init_s = time.Now()
 	var b_cnt int
@@ -100,7 +108,10 @@ func serve_ws(ctx echo.Context) error {
 		var newPld Payload
 		//var newJson []byte
 		currClnt.conn.ReadJSON(&newPld) //get msg type and msg
-		//fmt.Println(newPld)
+
+		docs := bson.D{{"room", newPld.RoomId}, {"id", newPld.UserId}, {"msg", newPld.Msg}}
+		coll.InsertOne(context.TODO(), docs)
+
 		if err != nil {
 			log.Println("read:", err)
 			break
@@ -132,6 +143,24 @@ func initFunc() {
 }
 
 func main() {
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		log.Fatal("You must set your 'MONGODB_URI' environmental variable. See\n\t https://www.mongodb.com/docs/drivers/go/current/usage-examples/#environment-variable")
+	}
+
+	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(uri))
+	if err != nil {
+		panic(err)
+	}
+
+	mg_client = client
+
+	defer func() {
+		if err := client.Disconnect(context.TODO()); err != nil {
+			panic(err)
+		}
+	}()
+
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
 	connMap = make(map[int][]*Client)
