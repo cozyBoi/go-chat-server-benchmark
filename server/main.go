@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -123,6 +125,10 @@ func serve_ws(ctx echo.Context) error {
 		}
 		newPld.issueTime = time.Now()
 		//db_chan <- newPld
+
+		pbytes, _ := json.Marshal(newPld)
+		buff := bytes.NewBuffer(pbytes)
+		http.Post("http://jupiter03:9200/db", "application/json", buff)
 
 		b_cnt += broadcast_msg(c, newPld, newPld.RoomId)
 	}
